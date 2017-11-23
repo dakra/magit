@@ -277,6 +277,9 @@ Changes since v2.11.0
   because Git does not ignore invalid refspecs and instead refuses
   to fetch using only the refspecs that are still valid.  #3134
 
+* Added commands `magit-cherry-harvest', `magit-cherry-move'
+  `magit-cherry-spinoff'.  #3134
+
 Fixes since v2.11.0
 -------------------
 
