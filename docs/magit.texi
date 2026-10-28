@@ -4312,6 +4312,14 @@ the git-diff(1) manpage.
 @end iftex
 @end defopt
 
+@defopt magit-diff-show-numstat
+This option controls whether the exact number of added and removed
+lines is shown for each file.  If non-nil, @code{+N -M} is appended to
+each line of the diffstat and to the headings of file sections.
+Counts are only shown in diff and revision buffers, and only when
+the diffstat (@code{--stat}) is shown.
+@end defopt
+
 @defopt magit-format-file-function
 This function is used to format lines representing a file.  It is
 used for file headings in diffs, in diffstats and for lists of files

@@ -3659,6 +3659,14 @@ that they are available here too.
   allowed here: ~--stat-width~, ~--stat-name-width~,
   ~--stat-graph-width~ and ~--compact-summary~.  Also see [[man:git-diff]]
 
+- User Option: magit-diff-show-numstat ::
+
+  This option controls whether the exact number of added and removed
+  lines is shown for each file.  If non-nil, ~+N -M~ is appended to
+  each line of the diffstat and to the headings of file sections.
+  Counts are only shown in diff and revision buffers, and only when
+  the diffstat (~--stat~) is shown.
+
 - User Option: magit-format-file-function ::
 
   This function is used to format lines representing a file.  It is

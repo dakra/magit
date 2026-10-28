@@ -361,6 +361,16 @@ and \"--compact-summary\".  See the git-diff(1) manpage."
                 (list string)
                 (const :tag "None" nil)))
 
+(defcustom magit-diff-show-numstat nil
+  "Whether to show the exact number of added and removed lines per file.
+
+If non-nil, append \"+N -M\" to each line of the diffstat and to the
+headings of file sections.  Counts are only shown in diff and revision
+buffers, and only when the diffstat (\"--stat\") is shown."
+  :package-version '(magit . "4.7.2")
+  :group 'magit-diff
+  :type 'boolean)
+
 (defcustom magit-format-file-function #'magit-format-file-default
   "Function used to format lines representing a file.
 
@@ -2621,9 +2631,16 @@ keymap is the parent of their keymaps."
           "\\(-*\\)$"))  ; del
 
 (defun magit-diff-use-window-width-as-stat-width ()
-  "Use the `window-width' as the value of \"--stat-width\"."
+  "Use the `window-width' as the value of \"--stat-width\".
+If `magit-diff-show-numstat' is non-nil, leave room for the counts."
   (and$ (get-buffer-window (current-buffer) 'visible)
-        (list (format "--stat-width=%d" (window-width $)))))
+        (list (format "--stat-width=%d"
+                      (- (window-width $)
+                         ;; " +NNNNN -NNNNN"
+                         (if magit-diff-show-numstat 14 0))))))
+
+(defvar magit-diff--numstat nil
+  "Alist of (FILE ADDED REMOVED) from the diffstat being washed.")
 
 (defun magit-diff-wash-diffs (args &optional limit)
   (run-hooks 'magit-diff-wash-diffs-hook)
@@ -2632,12 +2649,13 @@ keymap is the parent of their keymaps."
   (when (any (##string-prefix-p "--color-moved" %) args)
     (require 'ansi-color)
     (ansi-color-apply-on-region (point-min) (point-max)))
-  (when (member "--stat" args)
-    (magit-diff-wash-diffstat))
-  (when (re-search-forward magit-diff-headline-re limit t)
-    (goto-char (pos-bol))
-    (magit-wash-sequence (##magit-diff-wash-diff args))
-    (insert ?\n)))
+  (let ((magit-diff--numstat nil))
+    (when (member "--stat" args)
+      (magit-diff-wash-diffstat))
+    (when (re-search-forward magit-diff-headline-re limit t)
+      (goto-char (pos-bol))
+      (magit-wash-sequence (##magit-diff-wash-diff args))
+      (insert ?\n))))
 
 (defun magit-diff-wash-signature (object)
   (cond
@@ -2675,18 +2693,22 @@ Primary key fingerprint: \\|\
         (magit-insert-heading
           (propertize heading 'font-lock-face 'magit-diff-file-heading))
         (let (files)
-          (while (looking-at "^[-0-9]+\t[-0-9]+\t\\(.+\\)$")
-            (push (magit-decode-git-path
-                   (cond-let
-                     [[file (match-str 1)]]
-                     ((string-match "{.* => \\(.*\\)}" file)
-                      (replace-match (match-str 1 file) nil t file))
-                     ((string-match " => " file)
-                      (substring file (match-end 0)))
-                     (file)))
-                  files)
+          (while (looking-at "^\\([-0-9]+\\)\t\\([-0-9]+\\)\t\\(.+\\)$")
+            (magit-bind-match-strings (added removed) nil
+              (push (list (magit-decode-git-path
+                           (cond-let
+                             [[file (match-str 3)]]
+                             ((string-match "{.* => \\(.*\\)}" file)
+                              (replace-match (match-str 1 file) nil t file))
+                             ((string-match " => " file)
+                              (substring file (match-end 0)))
+                             (file)))
+                          added removed)
+                    files))
             (magit-delete-line))
           (setq files (nreverse files))
+          (when magit-diff-show-numstat
+            (setq magit-diff--numstat files))
           (while (looking-at magit-diff-statline-re)
             (magit-bind-match-strings (file sep cnt add del) nil
               (magit-delete-line)
@@ -2698,17 +2720,33 @@ Primary key fingerprint: \\|\
                 (setq ld (length file))
                 (when (> le ld)
                   (setq sep (concat (make-string (- le ld) ?\s) sep))))
-              (magit-insert-section (file (pop files))
-                (insert (magit-format-file 'stat file 'magit-filename))
-                (insert sep cnt " ")
-                (when add
-                  (insert (propertize add 'font-lock-face
-                                      'magit-diffstat-added)))
-                (when del
-                  (insert (propertize del 'font-lock-face
-                                      'magit-diffstat-removed)))
-                (insert "\n")))))
+              (let ((entry (pop files)))
+                (magit-insert-section (file (car entry))
+                  (insert (magit-format-file 'stat file 'magit-filename))
+                  (insert sep cnt " ")
+                  (when add
+                    (insert (propertize add 'font-lock-face
+                                        'magit-diffstat-added)))
+                  (when del
+                    (insert (propertize del 'font-lock-face
+                                        'magit-diffstat-removed)))
+                  (when$ (magit-diff--format-numstat entry)
+                    (insert $))
+                  (insert "\n"))))))
         (if (looking-at "^$") (forward-line) (insert "\n"))))))
+
+(defun magit-diff--format-numstat (entry)
+  "Return \" +N -M\" for numstat ENTRY, or nil if disabled or binary."
+  (pcase-let ((`(,_ ,added ,removed) entry))
+    (and magit-diff-show-numstat
+         added
+         (not (equal added "-"))
+         (concat " "
+                 (magit--propertize-face (concat "+" added)
+                                         'magit-diffstat-added)
+                 " "
+                 (magit--propertize-face (concat "-" removed)
+                                         'magit-diffstat-removed)))))
 
 (defun magit-diff-wash-diff (args)
   (cond
@@ -2862,6 +2900,8 @@ Primary key fingerprint: \\|\
              (format " (%s, binary)" long-status))
             ((or binary long-status)
              (format " (%s)" (if binary "binary" long-status))))
+      (and (not (member status '("resolved" "unmerged")))
+           (magit-diff--format-numstat (assoc file magit-diff--numstat)))
       "\n")
     (when modes
       (magit-insert-section (hunk '(chmod))
@@ -3817,7 +3857,8 @@ actually a `diff' but a `diffstat' section."
                               (default-value
                                'magit-diff-highlight-indentation))))))))
       (when (and magit-diff-highlight-trailing
-                 (looking-at (concat prefix ".*?\\([ \t]+\\)?$")))
+                 (looking-at (concat prefix ".*?\\([ \t]+\\)
+?$")))
         (let ((ov (make-overlay (match-beginning 1) (match-end 1) nil t)))
           (overlay-put ov 'font-lock-face 'magit-diff-whitespace-warning)
           (overlay-put ov 'priority 2)
