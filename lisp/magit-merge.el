@@ -30,6 +30,8 @@
 (require 'magit-diff)
 
 (declare-function magit-git-push "magit-push" (branch target args))
+(declare-function magit--worktree-delete-confirm "magit-worktree" (worktree))
+(declare-function magit--worktree-delete "magit-worktree" (worktree))
 
 ;;; Commands
 
@@ -145,7 +147,12 @@ provided the respective remote branch already exists, ensuring
 that the respective pull-request (if any) won't get stuck on some
 obsolete version of the commits that are being merged.  Finally
 if `forge-branch-pullreq' was used to create the merged branch,
-then also remove the respective remote branch."
+then also remove the respective remote branch.
+
+If BRANCH is checked out in another worktree, then merge in that
+worktree instead of checking out BRANCH, and remove the current
+branch along with the current worktree, after confirmation.  That
+is not possible if the current worktree is the main worktree."
   (interactive
     (list (let ((branch (magit-get-current-branch)))
             (magit-read-other-local-branch
@@ -154,11 +161,22 @@ then also remove the respective remote branch."
              (and branch (magit-get-local-upstream-branch branch))))
           (magit-merge-arguments)))
   (let ((current (magit-get-current-branch))
-        (head (magit-rev-parse "HEAD")))
-    (when (zerop (magit-call-git "checkout" branch))
-      (if current
-          (magit--merge-absorb current args)
-        (magit-run-git-with-editor "merge" args head)))))
+        (head (magit-rev-parse "HEAD"))
+        (target (magit-worktree-of-branch branch)))
+    (cond ((not target)
+           (when (zerop (magit-call-git "checkout" branch))
+             (if current
+                 (magit--merge-absorb current args)
+               (magit-run-git-with-editor "merge" args head))))
+          ((not (file-exists-p target))
+           (user-error "`%s' is checked out in %s, which does not exist"
+                       branch (abbreviate-file-name target)))
+          (t
+           (let ((worktree (and current (magit--merge-absorb-confirm current))))
+             (with-current-buffer (magit-status-setup-buffer target)
+               (if current
+                   (magit--merge-absorb-start current args nil worktree)
+                 (magit-run-git-with-editor "merge" args head))))))))
 
 ;;;###autoload
 (defun magit-merge-absorb (branch &optional args)
@@ -169,17 +187,39 @@ provided the respective remote branch already exists, ensuring
 that the respective pull-request (if any) won't get stuck on some
 obsolete version of the commits that are being merged.  Finally
 if `forge-branch-pullreq' was used to create the merged branch,
-then also remove the respective remote branch."
+then also remove the respective remote branch.
+
+If BRANCH is checked out in a linked worktree, then that worktree
+is removed along with BRANCH, after confirmation.  BRANCH must not
+be checked out in the main worktree."
   (interactive (list (magit-read-other-local-branch "Absorb branch")
                      (magit-merge-arguments)))
   (magit--merge-absorb branch args))
 
 (defun magit--merge-absorb (branch args &optional message)
-  (when (equal branch (magit-main-branch))
-    (unless (yes-or-no-p
-             (format "Do you really want to merge `%s' into another branch? "
-                     branch))
-      (user-error "Abort")))
+  (magit--merge-absorb-start branch args message
+                             (magit--merge-absorb-confirm branch)))
+
+(defun magit--merge-absorb-confirm (branch)
+  "Confirm that BRANCH should be merged into another branch and removed.
+Return the worktree to remove along with BRANCH, or nil.  If BRANCH
+is checked out in a linked worktree, then confirm that it should be
+deleted.  If it is checked out in the main worktree, then signal an
+error, because that worktree cannot be removed."
+  (let ((worktree (magit-worktree-of-branch branch)))
+    (when (and worktree (equal worktree (caar (magit-list-worktrees))))
+      (user-error "Cannot remove `%s', which is checked out in %s"
+                  branch (abbreviate-file-name worktree)))
+    (when (equal branch (magit-main-branch))
+      (unless (yes-or-no-p
+               (format "Do you really want to merge `%s' into another branch? "
+                       branch))
+        (user-error "Abort")))
+    (when worktree
+      (magit--worktree-delete-confirm worktree))
+    worktree))
+
+(defun magit--merge-absorb-start (branch args message worktree)
   (cond-let
     ([target (magit-get-push-branch branch t)]
      (magit-git-push branch target (list "--force-with-lease"))
@@ -191,12 +231,13 @@ then also remove the respective remote branch."
               (magit-process-sentinel process event)
             (process-put process 'inhibit-refresh t)
             (magit-process-sentinel process event)
-            (magit--merge-absorb-1 branch args))
+            (magit--process-call-in-command-buffer process
+              (lambda () (magit--merge-absorb-1 branch args worktree))))
           (when message
             (message message))))))
-    ((magit--merge-absorb-1 branch args))))
+    ((magit--merge-absorb-1 branch args worktree))))
 
-(defun magit--merge-absorb-1 (branch args)
+(defun magit--merge-absorb-1 (branch args &optional worktree)
   (if-let ((pr (magit-get "branch" branch "pullRequest")))
       (magit-run-git-async
        "merge" args "-m"
@@ -217,9 +258,13 @@ then also remove the respective remote branch."
            (magit-process-sentinel process event)
          (process-put process 'inhibit-refresh t)
          (magit-process-sentinel process event)
-         (magit-branch-maybe-delete-pr-remote branch)
-         (magit-branch-unset-pushRemote branch)
-         (magit-run-git "branch" "-D" branch))))))
+         (magit--process-call-in-command-buffer process
+           (lambda ()
+             (when worktree
+               (magit--worktree-delete worktree))
+             (magit-branch-maybe-delete-pr-remote branch)
+             (magit-branch-unset-pushRemote branch)
+             (magit-run-git "branch" "-D" branch))))))))
 
 ;;;###autoload
 (defun magit-merge-squash (rev)

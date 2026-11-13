@@ -7130,6 +7130,10 @@ stuck on some obsolete version of the commits that are being merged.
 Finally, if @code{magit-branch-pull-request} was used to create the merged
 branch, then the respective remote branch is also removed.
 
+If the merged branch is checked out in a linked worktree, then that
+worktree is removed as well, after confirmation.  A branch that is
+checked out in the main worktree cannot be absorbed.
+
 To create an octopus-merge, separate branches with commas.
 
 @item @kbd{m d} (@code{magit-merge-dissolve})
@@ -7144,6 +7148,12 @@ This ensures that the respective pull-request (if any) won't get
 stuck on some obsolete version of the commits that are being merged.
 Finally, if @code{magit-branch-pull-request} was used to create the merged
 branch, then the respective remote branch is also removed.
+
+If the other branch is checked out in another worktree, then the
+merge happens in that worktree, whose status is shown, and the
+current branch is removed along with the current worktree, after
+confirmation.  That is not possible if the current worktree is the
+main worktree.
 
 @item @kbd{m s} (@code{magit-merge-squash})
 @kindex m s
@@ -9385,7 +9395,8 @@ Move an existing worktree to a new PATH@.
 @kindex Z k
 @findex magit-worktree-delete
 Delete a worktree, defaulting to the worktree at point.
-The primary worktree cannot be deleted.
+The primary worktree cannot be deleted.  Magit buffers that belong
+to the deleted worktree are killed.
 
 @item @kbd{Z g} (@code{magit-worktree-status})
 @kindex Z g

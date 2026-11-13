@@ -190,46 +190,69 @@ Interactively, use `magit-read-worktree-directory-function'."
 
 (defun magit-worktree-delete (worktree)
   "Delete a worktree, defaulting to the worktree at point.
-The primary worktree cannot be deleted."
+The primary worktree cannot be deleted.  Magit buffers that belong
+to the deleted worktree are killed."
   (interactive
     (list (magit-completing-read "Delete worktree"
                                  (mapcar #'car (cdr (magit-list-worktrees)))
                                  nil t nil nil
                                  (magit-section-value-if 'worktree))))
-  (if (file-directory-p (expand-file-name ".git" worktree))
-      (user-error "Deleting %s would delete the shared .git directory" worktree)
-    (let* ((wtrees (magit-list-worktrees))
-           (wtree (assoc worktree wtrees))
-           (locked (nth 5 wtree))
-           (primary (file-name-as-directory (caar wtrees))))
-      (when locked
-        (user-error "Cannot delete locked %s%s" worktree
-                    (if (stringp locked) (format " [reason: %s]" locked) "")))
-      (when (file-exists-p worktree)
-        (let (uncommitted)
-          (magit-confirm
-            (cond ((let ((default-directory worktree))
-                     (or (magit-anything-modified-p)
-                         (magit-untracked-files)))
-                   (setq uncommitted 'danger))
-                  (magit-delete-by-moving-to-trash 'trash)
-                  ('delete))
-            (format "%s worktree \"%s\"%s"
-                    (if magit-delete-by-moving-to-trash "Trash" "Delete")
-                    (file-name-nondirectory (directory-file-name worktree))
-                    (if uncommitted " despite uncommitted changes" ""))
-            nil nil (list worktree)))
-        (if magit-delete-by-moving-to-trash
-            (let ((delete-by-moving-to-trash t))
-              (delete-directory worktree t t))
-          (magit-call-git "worktree" "remove" "--force" worktree)))
-      (if (file-exists-p default-directory)
-          (magit-run-git "worktree" "prune")
-        (let ((default-directory primary))
-          (magit-run-git "worktree" "prune"))
-        (when (derived-mode-p 'magit-status-mode)
-          (kill-buffer)
-          (magit-status-setup-buffer primary))))))
+  (magit--worktree-delete-confirm worktree)
+  (magit--worktree-delete worktree))
+
+(defun magit--worktree-delete-confirm (worktree)
+  "Ask whether to delete WORKTREE, or signal an error if it cannot be."
+  (when (file-directory-p (expand-file-name ".git" worktree))
+    (user-error "Deleting %s would delete the shared .git directory" worktree))
+  (when-let ((locked (nth 5 (assoc worktree (magit-list-worktrees)))))
+    (user-error "Cannot delete locked %s%s" worktree
+                (if (stringp locked) (format " [reason: %s]" locked) "")))
+  (when (file-exists-p worktree)
+    (let (uncommitted)
+      (magit-confirm
+        (cond ((let ((default-directory worktree))
+                 (or (magit-anything-modified-p)
+                     (magit-untracked-files)))
+               (setq uncommitted 'danger))
+              (magit-delete-by-moving-to-trash 'trash)
+              ('delete))
+        (format "%s worktree \"%s\"%s"
+                (if magit-delete-by-moving-to-trash "Trash" "Delete")
+                (file-name-nondirectory (directory-file-name worktree))
+                (if uncommitted " despite uncommitted changes" ""))
+        nil nil (list worktree)))))
+
+(defun magit--worktree-delete (worktree)
+  "Delete WORKTREE without asking, and kill its other Magit buffers.
+Buffers with a running process are kept.  If the current buffer
+belongs to WORKTREE and is a status buffer, replace it with the
+status buffer of the primary worktree."
+  (let ((primary (file-name-as-directory (caar (magit-list-worktrees))))
+        (buffers
+         (and (file-exists-p worktree)
+              (cl-remove-if-not
+               (lambda (buf)
+                 (and (not (eq buf (current-buffer)))
+                      (with-current-buffer buf
+                        (and (derived-mode-p 'magit-mode)
+                             (not (get-buffer-process buf))
+                             (file-in-directory-p default-directory worktree)))))
+               (buffer-list)))))
+    (when (file-exists-p worktree)
+      (if magit-delete-by-moving-to-trash
+          (let ((delete-by-moving-to-trash t))
+            (delete-directory worktree t t))
+        (unless (zerop (magit-call-git "worktree" "remove" "--force" worktree))
+          (user-error "Could not delete worktree %s"
+                      (abbreviate-file-name worktree)))))
+    (mapc #'kill-buffer buffers)
+    (if (file-exists-p default-directory)
+        (magit-run-git "worktree" "prune")
+      (let ((default-directory primary))
+        (magit-run-git "worktree" "prune"))
+      (when (derived-mode-p 'magit-status-mode)
+        (kill-buffer)
+        (magit-status-setup-buffer primary)))))
 
 (defun magit-worktree-status (worktree)
   "Show the status for the worktree at point.

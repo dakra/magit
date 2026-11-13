@@ -253,6 +253,123 @@
     (should (equal (magit-list-remote-branch-names "origin" t)
                    (list "master")))))
 
+(defun magit-test-init-worktrees ()
+  "Create \"repo\" on master and \"wt\", a worktree on branch topic.
+Topic is one commit ahead of master.  Return the toplevel of \"wt\"."
+  (magit-test-init-repo "repo")
+  (let ((default-directory (expand-file-name "repo/")))
+    (magit-git "commit" "-m" "init" "--allow-empty")
+    (magit-git "worktree" "add" "-b" "topic" "../wt"))
+  (let ((default-directory (expand-file-name "wt/")))
+    (magit-git "commit" "-m" "topic" "--allow-empty")
+    (magit-toplevel)))
+
+(ert-deftest magit-worktree-of-branch ()
+  (magit-with-test-directory
+    (let ((wt (magit-test-init-worktrees))
+          (default-directory (expand-file-name "repo/")))
+      (should (equal (magit-worktree-of-branch "topic") wt))
+      (should (equal (magit-worktree-of-branch "master") (magit-toplevel)))
+      (magit-git "branch" "other")
+      (should-not (magit-worktree-of-branch "other")))))
+
+;;; Merge
+
+(defun magit-test-wait-for-process ()
+  (with-timeout (10 (error "Git process did not finish"))
+    (while magit-this-process
+      (accept-process-output nil 0.05))))
+
+(defmacro magit-test-with-worktree-merge (&rest body)
+  "Run BODY in a test directory set up by `magit-test-init-worktrees'.
+Bind `wt' to the toplevel of the worktree, `repo' to that of the main
+worktree and `topic' to the commit of branch topic."
+  (declare (indent 0) (debug t))
+  `(magit-with-test-directory
+     (let* ((wt (magit-test-init-worktrees))
+            (repo (let ((default-directory (expand-file-name "repo/")))
+                    (magit-toplevel)))
+            (topic (let ((default-directory repo))
+                     (magit-rev-parse "topic")))
+            (magit-no-confirm '(delete))
+            (magit-delete-by-moving-to-trash nil))
+       (ignore wt repo topic)
+       ,@body)))
+
+(ert-deftest magit-merge-dissolve:in-linked-worktree ()
+  (magit-test-with-worktree-merge
+    (with-current-buffer (magit-status-setup-buffer wt)
+      (magit-merge-dissolve "master"))
+    (magit-test-wait-for-process)
+    (should-not (file-exists-p wt))
+    (should-not (cl-find-if (lambda (buf)
+                              (string-prefix-p
+                               (file-name-as-directory wt)
+                               (buffer-local-value 'default-directory buf)))
+                            (buffer-list)))
+    (let ((default-directory repo))
+      (should (equal (magit-get-current-branch) "master"))
+      (should (equal (magit-rev-parse "master") topic))
+      (should-not (member "topic" (magit-list-local-branch-names)))
+      (should (equal (mapcar #'car (magit-list-worktrees)) (list repo))))))
+
+(ert-deftest magit-merge-dissolve:declined ()
+  (magit-test-with-worktree-merge
+    (let ((buffer (magit-status-setup-buffer wt)))
+      (cl-letf (((symbol-function 'magit-confirm)
+                 (lambda (&rest _) (user-error "Abort"))))
+        (with-current-buffer buffer
+          (should-error (magit-merge-dissolve "master") :type 'user-error)))
+      (should (eq (window-buffer (selected-window)) buffer))
+      (should-not magit-this-process)
+      (should (file-exists-p wt))
+      (let ((default-directory repo))
+        (should-not (equal (magit-rev-parse "master") topic))
+        (should (member "topic" (magit-list-local-branch-names)))))))
+
+(ert-deftest magit-merge-dissolve:into-missing-worktree ()
+  (magit-test-with-worktree-merge
+    (let ((default-directory repo))
+      (magit-git "worktree" "add" "-b" "other" "../wt2"))
+    (delete-directory (expand-file-name "wt2") t)
+    (let ((default-directory wt))
+      (should-error (magit-merge-dissolve "other") :type 'user-error)
+      (should-not magit-this-process)
+      (should (equal (magit-get-current-branch) "topic")))))
+
+(ert-deftest magit-merge-absorb:branch-in-linked-worktree ()
+  (magit-test-with-worktree-merge
+    (let ((default-directory repo))
+      (magit-merge-absorb "topic"))
+    (magit-test-wait-for-process)
+    (should-not (file-exists-p wt))
+    (let ((default-directory repo))
+      (should (equal (magit-rev-parse "master") topic))
+      (should-not (member "topic" (magit-list-local-branch-names))))))
+
+(ert-deftest magit-merge-absorb:branch-in-missing-worktree ()
+  (magit-test-with-worktree-merge
+    (delete-directory wt t)
+    (let ((default-directory repo))
+      (magit-merge-absorb "topic"))
+    (magit-test-wait-for-process)
+    (let ((default-directory repo))
+      (should (equal (magit-rev-parse "master") topic))
+      (should-not (member "topic" (magit-list-local-branch-names)))
+      (should (equal (mapcar #'car (magit-list-worktrees)) (list repo))))))
+
+(ert-deftest magit-merge-absorb:branch-in-main-worktree ()
+  (magit-test-with-worktree-merge
+    (let* ((default-directory wt)
+           (master (magit-rev-parse "master")))
+      ;; Refused before asking whether to merge the main branch.
+      (cl-letf (((symbol-function 'yes-or-no-p)
+                 (lambda (&rest _) (error "Asked"))))
+        (should-error (magit-merge-absorb "master") :type 'user-error))
+      (should-not magit-this-process)
+      (should (equal (magit-rev-parse "master") master))
+      (should (equal (magit-get-current-branch) "topic")))))
+
 ;;; Prompts
 
 (ert-deftest magit-process:match-prompt-nil-when-no-match ()

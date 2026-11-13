@@ -2413,6 +2413,11 @@ specified using `core.worktree'."
                    (if (> (length line) 8) (substring line 9) t)))))
     (nreverse worktrees)))
 
+(defun magit-worktree-of-branch (branch)
+  "Return the worktree in which BRANCH is checked out, or nil.
+The worktree may be one that no longer exists but was not pruned."
+  (car (cl-find branch (magit-list-worktrees) :key #'caddr :test #'equal)))
+
 (defun magit-symbolic-ref-p (string)
   "Return t if STRING is a reference, nil otherwise.
 Signal an error if STRING is not a string."

@@ -911,6 +911,22 @@ Magit status buffer."
             (setq default-directory (process-get process 'default-dir))
             (magit-refresh)))))))
 
+(defun magit--process-call-in-command-buffer (process function)
+  "Call FUNCTION in the buffer from which PROCESS was started.
+Bind `default-directory' to the directory in which PROCESS was
+started.  If that buffer was killed, call FUNCTION in a temporary
+buffer in that directory."
+  (declare (indent 1))
+  (let ((buffer (process-get process 'command-buf))
+        (directory (process-get process 'default-dir)))
+    (if (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (let ((default-directory directory))
+            (funcall function)))
+      (with-temp-buffer
+        (setq default-directory directory)
+        (funcall function)))))
+
 (defun magit-sequencer-process-sentinel (process event)
   "Special sentinel used by `magit-run-git-sequencer'."
   (when (memq (process-status process) '(exit signal))

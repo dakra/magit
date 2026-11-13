@@ -6052,6 +6052,10 @@ following suffix commands.
   Finally, if ~magit-branch-pull-request~ was used to create the merged
   branch, then the respective remote branch is also removed.
 
+  If the merged branch is checked out in a linked worktree, then that
+  worktree is removed as well, after confirmation.  A branch that is
+  checked out in the main worktree cannot be absorbed.
+
   To create an octopus-merge, separate branches with commas.
 
 - Key: m d (magit-merge-dissolve) ::
@@ -6065,6 +6069,12 @@ following suffix commands.
   stuck on some obsolete version of the commits that are being merged.
   Finally, if ~magit-branch-pull-request~ was used to create the merged
   branch, then the respective remote branch is also removed.
+
+  If the other branch is checked out in another worktree, then the
+  merge happens in that worktree, whose status is shown, and the
+  current branch is removed along with the current worktree, after
+  confirmation.  That is not possible if the current worktree is the
+  main worktree.
 
 - Key: m s (magit-merge-squash) ::
 
@@ -7803,7 +7813,8 @@ Also see [[man:git-worktree]]
 - Key: Z k (magit-worktree-delete) ::
 
   Delete a worktree, defaulting to the worktree at point.
-  The primary worktree cannot be deleted.
+  The primary worktree cannot be deleted.  Magit buffers that belong
+  to the deleted worktree are killed.
 
 - Key: Z g (magit-worktree-status) ::
 
